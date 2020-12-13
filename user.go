@@ -2,92 +2,52 @@ package main
 
 import (
 	"errors"
+	"sort"
 
 	"github.com/asaskevich/govalidator"
 )
 
-type User struct {
+// user is a git user represented by name and email.
+type user struct {
 	Name  string `json:"Name"`
 	Email string `json:"Email"`
 }
 
-func UsersToString(users []User) []string {
-	us := make([]string, len(users))
-	for i, user := range users {
-		us[i] = user.Name + " <" + user.Email + ">"
-	}
-
-	return us
+// String formats the user as "Name <Email>".
+func (u user) String() string {
+	return u.Name + " <" + u.Email + ">"
 }
 
-func ListUser() ([]User, error) {
-	configPath, err := ConfigPath()
-	if err != nil {
-		return nil, err
-	}
+// update adds the given user.
+// If user with the same email exists already, it's name is updated instead.
+func (c *config) update(u user) {
+	// check if there's already a user with the same email
+	idx := sort.Search(len(c.Users), func(i int) bool {
+		return c.Users[i].Email == u.Email
+	})
 
-	if !IsExist(configPath) {
-		return nil, errors.New("No user")
-	}
-
-	config, err := ReadConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return config.Users, nil
-}
-
-func CreateUser(name, email string) error {
-	configPath, err := ConfigPath()
-	if err != nil {
-		return err
-	}
-
-	if !IsExist(configPath) {
-		if err := CreateConfig(Config{Users: []User{User{Name: name, Email: email}}}); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	config, err := ReadConfig()
-	if err != nil {
-		return err
-	}
-
-	if config.Users == nil {
-		config.Users = []User{User{Name: name, Email: email}}
+	// if the user already exists, update it - otherwise create a new one
+	if idx < len(c.Users) {
+		c.Users[idx].Name = u.Name
 	} else {
-		config.Users = append(config.Users, User{Name: name, Email: email})
+		c.Users = append(c.Users, u)
+		sort.Slice(c.Users, func(i, j int) bool {
+			return c.Users[i].Email < c.Users[j].Email
+		})
 	}
-
-	if err := CreateConfig(config); err != nil {
-		return err
-	}
-
-	return nil
 }
 
-func RemoveUser(idx int, users []User) error {
-	newUsers := make([]User, len(users)-1)
-	if idx+1 == len(users) {
-		newUsers = users[:idx]
-	} else {
-		newUsers = append(users[:idx], users[idx+1:]...)
-	}
-
-	if err := CreateConfig(Config{Users: newUsers}); err != nil {
-		return err
-	}
-
-	return nil
+// removeUser returns a new slice with the element at index idx removed.
+// Note that this function does not do any bound checks.
+func (c *config) removeUser(idx int) {
+	copy(c.Users[idx:], c.Users[idx+1:])
+	c.Users = c.Users[:len(c.Users)-1]
 }
 
-func ValidateEmail(email string) error {
-	if !govalidator.IsExistingEmail(email) {
-		return errors.New("Invalid email address")
+// validateEmail checks if the string is an email.
+func validateEmail(email string) error {
+	if !govalidator.IsEmail(email) {
+		return errors.New("invalid email address")
 	}
-
 	return nil
 }

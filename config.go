@@ -2,61 +2,51 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
+	"log"
 	"os"
 	"path/filepath"
 )
 
-type Config struct {
-	Users []User `json:"Users"`
+type config struct {
+	Users []user `json:"Users"`
 }
 
-const ConfigFile = "config.json"
+var configPath string
+var errNoUser = errors.New("no users")
 
-func ConfigDir() (string, error) {
-	configDir, err := os.UserConfigDir()
+// init determines the configPath.
+func init() {
+	dir, err := os.UserConfigDir()
 	if err != nil {
-		return "", err
+		log.Fatalln("Cannot resolve config directory:", err)
 	}
-
-	return filepath.Join(configDir, "gitsu-go"), nil
+	configPath = filepath.Join(dir, "gitsu-go", "config.json")
 }
 
-func ConfigPath() (string, error) {
-	configDir, err := ConfigDir()
-	if err != nil {
-		return "", err
+// configDir resolves the config directory and creates it, if necessary.
+func configDir() string {
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		log.Fatalln("Cannot create config directory:", err)
 	}
-
-	return filepath.Join(configDir, ConfigFile), nil
+	return dir
 }
 
-func IsExist(path string) bool {
-	_, err := os.Stat(path)
-
-	return err == nil
+// configFile opens the config file in read-write mode.
+func configFile(flag int) *os.File {
+	configDir()
+	file, err := os.OpenFile(configPath, os.O_CREATE|os.O_RDWR|flag, 0600)
+	if err != nil {
+		log.Fatalln("cannot access config file", configPath)
+	}
+	return file
 }
 
-func CreateConfig(config Config) error {
-	configDir, err := ConfigDir()
-	if err != nil {
-		return err
-	}
-	if !IsExist(configDir) {
-		if err := os.Mkdir(configDir, 0744); err != nil {
-			return err
-		}
-	}
-
-	configPath, err := ConfigPath()
-	if err != nil {
-		return err
-	}
-
-	file, err := os.Create(configPath)
-	if err != nil {
-		return err
-	}
+// writeConfig saves the config into a file.
+func writeConfig(config *config) error {
+	file := configFile(os.O_TRUNC)
 	defer file.Close()
 
 	data, err := json.MarshalIndent(config, "", "\t")
@@ -64,29 +54,24 @@ func CreateConfig(config Config) error {
 		return err
 	}
 
-	if _, err := file.Write(data); err != nil {
-		return err
-	}
-
-	return nil
+	_, err = file.Write(data)
+	return err
 }
 
-func ReadConfig() (Config, error) {
-	var config Config
+// readConfig loads the config from a file.
+func readConfig() (*config, error) {
+	config := &config{}
+	if _, err := os.Stat(configPath); err != nil {
+		return config, errNoUser
+	}
 
-	configPath, err := ConfigPath()
+	file := configFile(0)
+	defer file.Close()
+	data, err := ioutil.ReadAll(file)
 	if err != nil {
 		return config, err
 	}
 
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return config, err
-	}
-
-	if err := json.Unmarshal(data, &config); err != nil {
-		return config, err
-	}
-
-	return config, nil
+	err = json.Unmarshal(data, &config)
+	return config, err
 }

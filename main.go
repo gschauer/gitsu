@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 
@@ -31,71 +33,60 @@ var (
 	date    = "?"
 )
 
-func main() {
-	flag.Usage = usage
-	flag.Parse()
-
-	os.Exit(run())
-}
-
 const (
 	sel = "Select git user"
 	add = "Add new git user"
 	del = "Delete git user"
 )
 
-func run() int {
-	action := promptui.Select{
+func main() {
+	log.SetFlags(0)
+	flag.Usage = usage
+	flag.Parse()
+
+	prompt := promptui.Select{
 		Label: "Select action",
 		Items: []string{sel, add, del},
 	}
 
-	_, actionType, err := action.Run()
+	_, res, err := prompt.Run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to select action: %v\n", err)
-		return 1
+		log.Fatalln("Failed to select action:", err)
 	}
-
-	switch actionType {
-	case sel:
-		if err := selectUser(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to select user: %v\n", err)
-			return 1
-		}
-	case add:
-		if err := addUser(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to add user: %v\n", err)
-			return 1
-		}
-	case del:
-		if err := deleteUser(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to delete user: %v\n", err)
-			return 1
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "Unexpected action type\n")
-		return 1
-	}
-
-	return 0
+	run(res)
 }
 
-func selectUser() error {
-	users, err := ListUser()
-	if err != nil {
-		return err
+func run(res string) {
+	c, err := readConfig()
+	if err != nil && (res != add || !errors.Is(err, errNoUser)) {
+		log.Fatalln("Cannot read config:", err)
 	}
 
-	if len(users) == 0 {
-		fmt.Println("No users")
-		return nil
+	switch res {
+	case sel:
+		if err := setUser(c); err != nil {
+			log.Fatalln("Failed to select user:", err)
+		}
+	case add:
+		u, err := addUser()
+		if err != nil {
+			log.Fatalln("Failed to add user:", err)
+		}
+		c.update(u)
+		if err = writeConfig(c); err != nil {
+			log.Fatalln("Failed to add user:", err)
+		}
+	case del:
+		if err := deleteUser(c); err != nil {
+			log.Fatalln("Failed to delete user:", err)
+		}
+	default:
+		log.Fatalln("Unexpected action type")
 	}
+}
 
-	user := promptui.Select{
-		Label: "Select git user",
-		Items: UsersToString(users),
-	}
-	selectedUserIndex, _, err := user.Run()
+func setUser(c *config) error {
+	idx, err := selUser(c)
 	if err != nil {
 		return err
 	}
@@ -105,66 +96,56 @@ func selectUser() error {
 		option = "--global"
 	}
 
-	cmdName := exec.Command("git", "config", option, "user.name", users[selectedUserIndex].Name)
-	if err := cmdName.Run(); err != nil {
+	nameCmd := exec.Command("git", "config", option, "user.name", c.Users[idx].Name)
+	if err := nameCmd.Run(); err != nil {
 		return err
 	}
-	cmdMail := exec.Command("git", "config", option, "user.email", users[selectedUserIndex].Email)
-	if err := cmdMail.Run(); err != nil {
+	emailCmd := exec.Command("git", "config", option, "user.email", c.Users[idx].Email)
+	if err := emailCmd.Run(); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-func addUser() error {
-	name := promptui.Prompt{
+func addUser() (user, error) {
+	var u user
+	prompt := promptui.Prompt{
 		Label: "Input git user name",
 	}
-	resultName, err := name.Run()
+	name, err := prompt.Run()
 	if err != nil {
-		return err
+		return u, err
 	}
 
-	email := promptui.Prompt{
+	prompt = promptui.Prompt{
 		Label:    "Input git email address",
-		Validate: ValidateEmail,
+		Validate: validateEmail,
 	}
-	resultEmail, err := email.Run()
+	email, err := prompt.Run()
 	if err != nil {
-		return err
+		return u, err
 	}
-
-	if err := CreateUser(resultName, resultEmail); err != nil {
-		return err
-	}
-
-	return nil
+	return user{name, email}, nil
 }
 
-func deleteUser() error {
-	users, err := ListUser()
+func deleteUser(c *config) error {
+	idx, err := selUser(c)
 	if err != nil {
 		return err
 	}
+	c.removeUser(idx)
+	return writeConfig(c)
+}
 
-	if len(users) == 0 {
-		fmt.Println("No users")
-		return nil
+func selUser(c *config) (int, error) {
+	if len(c.Users) == 0 {
+		return 0, errNoUser
 	}
 
-	user := promptui.Select{
+	prompt := promptui.Select{
 		Label: "Select git user",
-		Items: UsersToString(users),
+		Items: c.Users,
 	}
-	selectedUserIndex, _, err := user.Run()
-	if err != nil {
-		return err
-	}
-
-	if err := RemoveUser(selectedUserIndex, users); err != nil {
-		return err
-	}
-
-	return nil
+	idx, _, err := prompt.Run()
+	return idx, err
 }
